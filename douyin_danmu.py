@@ -1,10 +1,7 @@
-import json
 import asyncio
-import websockets
 import logging
 from playwright.async_api import async_playwright
 
-clients = set()  # 客户端
 debug = True  # 调试状态
 
 # 日志输出设置
@@ -17,24 +14,9 @@ handler_console.setFormatter(fmt)
 logger.addHandler(handler_console)
 
 
-# websocket 服务
-async def ws_handler(websocket, path):
-    logger.info(f"Client connected {websocket.remote_address[0]}:{websocket.remote_address[1]}{path}")
-    clients.add(websocket)
-    try:
-        await websocket.wait_closed()
-    finally:
-        clients.remove(websocket)
-
-
-
-# 广播消息
-async def broadcast_message(msg: dict):
+# 输出消息
+async def print_message(msg: dict):
     logger.debug(msg)
-    data = json.dumps(msg)
-    for c in clients:
-        await c.send(data)
-    return ""
 
 
 # 注入的代码，先隐藏播放器，再监听聊天栏 以抖音为例其他平台做对应修改
@@ -67,33 +49,29 @@ async def open_room(room_url, javascript):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=not debug, channel="msedge")  # 启动Edge浏览器
         context = await browser.new_context()
-        await context.expose_function(callback_name, broadcast_message)
+        await context.expose_function(callback_name, print_message)
         page = await context.new_page()
         while True:
-            if page.is_closed() or page.url != room_url:
-                if page.is_closed():  # 保持打开
+            if page.is_closed() or page.url != room_url:  # 保持打开
+                if page.is_closed():  
                     page = await context.new_page()
                 await page.goto(room_url)
                 await page.evaluate(javascript)
 
             await asyncio.sleep(check_interval)
-            await broadcast_message({"state": "alive", "interval": check_interval})  # 解决客户端同步读取模式下的挂起问题
 
 
 # 运行hub
-def run_hub_forever(listen_port, room_url, script):
+def run_hub_forever(room_url, script):
     try:
-        ws_future = websockets.serve(ws_handler, "localhost", listen_port)
-        logger.info(f"Hub server listen at: {listen_port}")
         room_future = open_room(room_url, script)
-        asyncio.gather(room_future, ws_future)
+        logger.info(f"Hub started.")
+        asyncio.gather(room_future)
         asyncio.get_event_loop().run_forever()
     except Exception as ex:
-        logger.error(f"Hub server exception: {ex}")
+        logger.error(f"Hub exception: {ex}")
 
 
 if __name__ == "__main__":
     room_douyin = "https://live.douyin.com/208754230598"  # douyin room url
-    ws_port = 88  # websocket listen port
-    
-    run_hub_forever(ws_port, room_douyin, script_douyin)
+    run_hub_forever(room_douyin, script_douyin)
